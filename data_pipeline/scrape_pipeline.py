@@ -102,7 +102,7 @@ rating_map = {
 # Remove £ and convert price to float
 df["price_gbp"] = (
     df["price"]
-    .str.replace("£", "", regex=False)
+    .str.replace(r"[^0-9.]", "", regex=True)
     .astype(float)
 )
 
