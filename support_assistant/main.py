@@ -8,10 +8,6 @@ from sentence_transformers import SentenceTransformer
 from langgraph.graph import StateGraph, START, END
 
 
-# --------------------------------------------------
-# Configuration
-# --------------------------------------------------
-
 MOCK_LLM = os.getenv("MOCK_LLM", "1") != "0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,10 +16,6 @@ CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-
-# --------------------------------------------------
-# Pydantic schemas
-# --------------------------------------------------
 
 class AskRequest(BaseModel):
     query: str
@@ -35,10 +27,6 @@ class AnswerResponse(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-# --------------------------------------------------
-# LangGraph state
-# --------------------------------------------------
-
 class AssistantState(TypedDict, total=False):
     query: str
     intent: str
@@ -46,10 +34,6 @@ class AssistantState(TypedDict, total=False):
     sources: list[str]
     confidence: float
 
-
-# --------------------------------------------------
-# Embedding model + ChromaDB
-# --------------------------------------------------
 
 embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 
@@ -60,10 +44,6 @@ collection = chroma_client.get_or_create_collection(
     metadata={"hnsw:space": "cosine"}
 )
 
-
-# --------------------------------------------------
-# Document ingestion
-# --------------------------------------------------
 
 def load_documents():
     documents = []
@@ -132,10 +112,6 @@ def build_vector_store():
     print(f"ChromaDB documents available: {collection.count()}")
 
 
-# --------------------------------------------------
-# Structured prompt
-# --------------------------------------------------
-
 PROMPT_TEMPLATE = """
 ROLE:
 You are a Zepto customer-support assistant.
@@ -168,10 +144,6 @@ Retrieved Context:
 """
 
 
-# --------------------------------------------------
-# Intent classification
-# --------------------------------------------------
-
 POLICY_KEYWORDS = [
     "delivery",
     "return",
@@ -195,10 +167,6 @@ def classify_intent(state: AssistantState):
     return {"intent": intent}
 
 
-# --------------------------------------------------
-# Retrieval
-# --------------------------------------------------
-
 def retrieve_documents(query: str):
     query_embedding = embedding_model.encode(
         [query],
@@ -216,10 +184,6 @@ def retrieve_documents(query: str):
     return documents, ids
 
 
-# --------------------------------------------------
-# Retrieval + answer node
-# --------------------------------------------------
-
 def retrieve_and_answer(state: AssistantState):
     documents, ids = retrieve_documents(state["query"])
 
@@ -228,8 +192,7 @@ def retrieve_and_answer(state: AssistantState):
 
     if MOCK_LLM:
         answer = (
-            f"Based on the retrieved context: "
-            f"{top_chunk_snippet}"
+            f"Based on the retrieved context: {top_chunk_snippet}"
         )
 
         return {
@@ -238,8 +201,6 @@ def retrieve_and_answer(state: AssistantState):
             "confidence": 1.0
         }
 
-    # Optional real-LLM path.
-    # The structured prompt is prepared here for a real LLM.
     context = "\n\n".join(documents)
 
     prompt = PROMPT_TEMPLATE.format(
@@ -247,7 +208,6 @@ def retrieve_and_answer(state: AssistantState):
         context=context
     )
 
-    # Optional extension placeholder.
     answer = (
         "Real LLM mode is optional. "
         "Use the structured prompt below with your chosen free-tier LLM:\n"
@@ -261,48 +221,52 @@ def retrieve_and_answer(state: AssistantState):
     }
 
 
-# --------------------------------------------------
-# General-question node
-# --------------------------------------------------
-
 def direct_answer(state: AssistantState):
+    answer = "I can only answer questions about Zepto policies right now."
 
-    if MOCK_LLM:
-        answer = (
-            "I can only answer questions about Zepto policies right now."
-        )
-
-        return {
-            "answer": answer,
-            "sources": [],
-            "confidence": 1.0
-        }
-
-    # Optional real-LLM path.
     return {
-        "answer": (
-            "I can only answer questions about Zepto policies right now."
-        ),
+        "answer": answer,
         "sources": [],
         "confidence": 1.0
     }
 
 
-# --------------------------------------------------
-# Conditional routing
-# --------------------------------------------------
-
 def route_intent(state: AssistantState):
-
     if state["intent"] == "policy_question":
         return "retrieve_and_answer"
 
     return "direct_answer"
 
 
-# --------------------------------------------------
-# Build LangGraph
-# --------------------------------------------------
+# ---------------------------------------------------------
+# Pydantic validation with retry logic
+# ---------------------------------------------------------
+
+def validate_with_retry(
+    answer: str,
+    sources: list[str],
+    confidence: float
+):
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            return AnswerResponse(
+                answer=answer,
+                sources=sources,
+                confidence=confidence
+            )
+
+        except Exception as error:
+            last_error = error
+
+            if attempt == 2:
+                raise last_error
+
+
+# ---------------------------------------------------------
+# LangGraph
+# ---------------------------------------------------------
 
 graph_builder = StateGraph(AssistantState)
 
@@ -348,16 +312,13 @@ graph_builder.add_edge(
 graph = graph_builder.compile()
 
 
-# --------------------------------------------------
-# Build vector store
-# --------------------------------------------------
-
+# Build ChromaDB vector store
 build_vector_store()
 
 
-# --------------------------------------------------
-# FastAPI application
-# --------------------------------------------------
+# ---------------------------------------------------------
+# FastAPI
+# ---------------------------------------------------------
 
 app = FastAPI(
     title="Zepto Support Assistant",
@@ -369,12 +330,10 @@ app = FastAPI(
 def ask(request: AskRequest):
 
     result = graph.invoke(
-        {
-            "query": request.query
-        }
+        {"query": request.query}
     )
 
-    response = AnswerResponse(
+    response = validate_with_retry(
         answer=result["answer"],
         sources=result.get("sources", []),
         confidence=result.get("confidence", 1.0)
