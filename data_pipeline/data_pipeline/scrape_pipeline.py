@@ -83,3 +83,58 @@ print(df.head())
 
 print("\nDataFrame shape:")
 print(df.shape)
+# -----------------------------
+# Data Cleaning
+# -----------------------------
+
+rating_map = {
+    "One": 1,
+    "Two": 2,
+    "Three": 3,
+    "Four": 4,
+    "Five": 5
+}
+
+# Convert price from £ text to float
+df["price_gbp"] = (
+    df["price"]
+    .str.replace("£", "", regex=False)
+    .astype(float)
+)
+
+# Convert star rating text to integer
+df["rating"] = df["star_rating"].map(rating_map)
+
+# Convert availability text to Boolean
+df["in_stock"] = df["availability"].str.contains(
+    "In stock",
+    case=False,
+    na=False
+)
+
+# Convert GBP to INR using fixed exchange rate
+GBP_TO_INR = 105.50
+
+df["price_inr"] = df["price_gbp"] * GBP_TO_INR
+
+# Remove rows where important numeric values could not be parsed
+df = df.dropna(
+    subset=["price_gbp", "rating"]
+)
+
+print("\nCleaned Data:")
+print(
+    df[
+        [
+            "title",
+            "price_gbp",
+            "price_inr",
+            "rating",
+            "in_stock",
+            "category"
+        ]
+    ].head()
+)
+
+print("\nData types:")
+print(df.dtypes)
